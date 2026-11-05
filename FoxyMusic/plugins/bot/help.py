@@ -101,7 +101,7 @@ async def helper_cb(client, CallbackQuery, _):
         else:
             await CallbackQuery.edit_message_text(
                 "<b><u>❖ ᴄʟᴏɴᴇ ʜᴇʟᴘ :</u></b>\n\n"
-                "๏ /clone - ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ғᴏxʏᴍᴜsɪᴄ ᴄʟᴏɴᴇ.\n"
+                "๏ /clone - ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ KᴀᴠʏᴀMᴜsɪᴄ ᴄʟᴏɴᴇ.\n"
                 "๏ /clones - ᴠɪᴇᴡ ʏᴏᴜʀ ᴄʟᴏɴᴇs.\n"
                 "๏ /unclone - ʀᴇᴍᴏᴠᴇ ᴀ ᴄʟᴏɴᴇ.\n\n"
                 "⚠️ ɴᴇᴠᴇʀ sʜᴀʀᴇ ʏᴏᴜʀ ʙᴏᴛ ᴛᴏᴋᴇɴ.",
