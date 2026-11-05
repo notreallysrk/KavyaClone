@@ -41,7 +41,7 @@ async def clone_command(client, message: Message):
                 "Set MONGO_DB_URI and CLONE_ENCRYPTION_KEY, then restart the bot."
             )
         return await message.reply_text(
-            "🤖 <b>Create your own FoxyMusic clone</b>\n\n"
+            "🤖 <b>Create your own KavyaMusic clone</b>\n\n"
             "1. Create a bot with @BotFather.\n"
             "2. Open this bot in private.\n"
             "3. Send <code>/clone BOT_TOKEN</code>.\n\n"
