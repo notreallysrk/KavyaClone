@@ -166,7 +166,7 @@ class CloneManager:
         if attached == 0:
             raise RuntimeError(
                 "No handlers were available to copy. Clone startup must run "
-                "after all FoxyMusic plugins have loaded."
+                "after all KavyaMusic plugins have loaded."
             )
         return attached
 
