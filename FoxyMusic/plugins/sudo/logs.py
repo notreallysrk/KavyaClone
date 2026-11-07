@@ -14,7 +14,7 @@ from config import LOGGER_ID
 
 
 _LOG_IMAGE = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../assets/upic.png")
+    os.path.join(os.path.dirname(__file__), "../../assets/archon.png")
 )
 
 
