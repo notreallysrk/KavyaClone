@@ -10,6 +10,7 @@ import random
 from typing import Dict, List, Union
 
 from FoxyMusic import userbot
+from FoxyMusic.core.client_context import get_client as get_current_client
 from FoxyMusic.core.mongo import mongodb
 
 authdb = mongodb.adminauth
@@ -561,46 +562,98 @@ async def maintenance_on():
     return await onoffdb.insert_one({"on_off": 1})
 
 
+async def _served_bot_context():
+    """Return (bot_id, include_legacy) for the active main/clone client."""
+    client = get_current_client()
+    if client is None:
+        return None, True
+    bot_id = getattr(client, "id", None)
+    if not bot_id:
+        me = getattr(client, "me", None)
+        if me is None:
+            me = await client.get_me()
+        bot_id = getattr(me, "id", None)
+        if bot_id:
+            try:
+                client.id = int(bot_id)
+            except Exception:
+                pass
+    # Old records without bot_id belong to the primary bot. Clones must never
+    # claim those records as their own broadcast recipients.
+    return (int(bot_id) if bot_id else None), not bool(
+        getattr(client, "owner_id", None)
+    )
+
+
+def _served_scope(base_query: dict, bot_id, include_legacy: bool):
+    if not bot_id:
+        return base_query
+    scopes = [{"bot_id": int(bot_id)}]
+    if include_legacy:
+        scopes.append({"bot_id": {"$exists": False}})
+    return {"$and": [base_query, {"$or": scopes}]}
+
+
 async def is_served_user(user_id: int) -> bool:
-    user = await usersdb.find_one({"user_id": user_id})
-    if not user:
-        return False
-    return True
+    bot_id, include_legacy = await _served_bot_context()
+    query = _served_scope({"user_id": user_id}, bot_id, include_legacy)
+    return bool(await usersdb.find_one(query))
 
 
-async def get_served_users() -> list:
+async def get_served_users(bot_id=None, include_legacy=False) -> list:
+    if bot_id is None:
+        bot_id, include_legacy = await _served_bot_context()
+    query = _served_scope({"user_id": {"$gt": 0}}, bot_id, include_legacy)
     users_list = []
-    async for user in usersdb.find({"user_id": {"$gt": 0}}):
-        users_list.append(user)
+    seen = set()
+    async for user in usersdb.find(query):
+        user_id = int(user["user_id"])
+        if user_id not in seen:
+            seen.add(user_id)
+            users_list.append(user)
     return users_list
 
 
 async def add_served_user(user_id: int):
+    bot_id, _ = await _served_bot_context()
     is_served = await is_served_user(user_id)
     if is_served:
         return
-    return await usersdb.insert_one({"user_id": user_id})
+    record = {"user_id": user_id}
+    if bot_id:
+        record["bot_id"] = bot_id
+    return await usersdb.insert_one(record)
 
 
-async def get_served_chats() -> list:
+async def get_served_chats(bot_id=None, include_legacy=False) -> list:
+    if bot_id is None:
+        bot_id, include_legacy = await _served_bot_context()
+    query = _served_scope({"chat_id": {"$lt": 0}}, bot_id, include_legacy)
     chats_list = []
-    async for chat in chatsdb.find({"chat_id": {"$lt": 0}}):
-        chats_list.append(chat)
+    seen = set()
+    async for chat in chatsdb.find(query):
+        chat_id = int(chat["chat_id"])
+        if chat_id not in seen:
+            seen.add(chat_id)
+            chats_list.append(chat)
     return chats_list
 
 
 async def is_served_chat(chat_id: int) -> bool:
-    chat = await chatsdb.find_one({"chat_id": chat_id})
-    if not chat:
-        return False
-    return True
+    bot_id, include_legacy = await _served_bot_context()
+    query = _served_scope({"chat_id": chat_id}, bot_id, include_legacy)
+    return bool(await chatsdb.find_one(query))
 
 
 async def add_served_chat(chat_id: int):
+    bot_id, _ = await _served_bot_context()
     is_served = await is_served_chat(chat_id)
     if is_served:
         return
-    return await chatsdb.insert_one({"chat_id": chat_id})
+    record = {"chat_id": chat_id}
+    if bot_id:
+        record["bot_id"] = bot_id
+    return await chatsdb.insert_one(record)
 
 
 async def blacklisted_chats() -> list:
