@@ -80,7 +80,7 @@ def _player_buttons(chat_id, played="00:00", dur="00:00"):
             InlineKeyboardButton(text="▷", callback_data=f"ADMIN Resume|{chat_id}", style=ButtonStyle.SUCCESS),
             InlineKeyboardButton(text="Ⅱ", callback_data=f"ADMIN Pause|{chat_id}", style=ButtonStyle.DANGER),
             InlineKeyboardButton(text="✿", callback_data=f"ADMIN Filter|{chat_id}", style=ButtonStyle.SUCCESS),
-            InlineKeyboardButton(text="▶▶I", callback_data=f"ADMIN Skip|{chat_id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="‣‣I", callback_data=f"ADMIN Skip|{chat_id}", style=ButtonStyle.SUCCESS),
             InlineKeyboardButton(text="▢", callback_data=f"ADMIN Stop|{chat_id}", style=ButtonStyle.DANGER),
         ],
         [
@@ -89,8 +89,8 @@ def _player_buttons(chat_id, played="00:00", dur="00:00"):
             InlineKeyboardButton(text="+20s ≫", callback_data="seek_forward_20", style=ButtonStyle.DANGER),
         ],
         [
-            InlineKeyboardButton(text="✪ ADD ME ✪", url=add_me_url, style=ButtonStyle.DANGER),
-            InlineKeyboardButton(text="✪ CLOSE ✪", callback_data="close", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="Aᴅᴅ Mᴇ", url=add_me_url, style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="Cʟᴏsᴇ", callback_data="close", style=ButtonStyle.SUCCESS),
         ],
     ]
 
