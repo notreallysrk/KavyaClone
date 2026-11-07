@@ -13,6 +13,7 @@ from pyrogram.enums import ButtonStyle
 from pyrogram.types import InlineKeyboardButton
 
 from FoxyMusic import app
+from FoxyMusic.core.client_context import get_client
 from FoxyMusic.utils.formatters import time_to_seconds
 
 
@@ -46,6 +47,66 @@ def track_markup(_, videoid, user_id, channel, fplay, thumb: Union[bool, str] = 
     return buttons
 
 
+def _clock(value):
+    """Convert seconds or a time string to MM:SS for the player bar."""
+    try:
+        seconds = int(value) if isinstance(value, (int, float)) else time_to_seconds(str(value))
+    except Exception:
+        seconds = 0
+    seconds = max(0, seconds)
+    return f"{seconds // 60:02d}:{seconds % 60:02d}", seconds
+
+
+def _player_buttons(chat_id, played="00:00", dur="00:00"):
+    played_text, played_seconds = _clock(played)
+    duration_text, duration_seconds = _clock(dur)
+    if duration_seconds:
+        progress = min(10, max(0, round((played_seconds / duration_seconds) * 10)))
+    else:
+        progress = 0
+    bar = "━" * progress + "♡" + "━" * (10 - progress)
+
+    client = get_client()
+    username = getattr(client, "username", None) or getattr(app, "username", None)
+    add_me_url = f"https://t.me/{username}?startgroup=true" if username else "https://t.me/"
+
+    return [
+        [InlineKeyboardButton(
+            text=f"{played_text} ━{bar}━ {duration_text}",
+            callback_data=f"ADMIN Progress|{chat_id}",
+            style=ButtonStyle.PRIMARY,
+        )],
+        [
+            InlineKeyboardButton(text="▷", callback_data=f"ADMIN Resume|{chat_id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="Ⅱ", callback_data=f"ADMIN Pause|{chat_id}", style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="✿", callback_data=f"ADMIN Filter|{chat_id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="▶▶I", callback_data=f"ADMIN Skip|{chat_id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="▢", callback_data=f"ADMIN Stop|{chat_id}", style=ButtonStyle.DANGER),
+        ],
+        [
+            InlineKeyboardButton(text="≪ -20s", callback_data="seek_backward_20", style=ButtonStyle.PRIMARY),
+            InlineKeyboardButton(text="↻", callback_data=f"ADMIN Replay|{chat_id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="+20s ≫", callback_data="seek_forward_20", style=ButtonStyle.DANGER),
+        ],
+        [
+            InlineKeyboardButton(text="✪ ADD ME ✪", url=add_me_url, style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="✪ CLOSE ✪", callback_data="close", style=ButtonStyle.SUCCESS),
+        ],
+    ]
+
+
+def _current_track_times(chat_id):
+    try:
+        from FoxyMusic.misc import db
+        playing = db.get(chat_id) or []
+        if playing:
+            track = playing[0]
+            return track.get("played", 0), track.get("dur", "00:00")
+    except Exception:
+        pass
+    return 0, "00:00"
+
+
 def stream_markup_timer(
     _,
     chat_id,
@@ -56,147 +117,7 @@ def stream_markup_timer(
     chat_filter: Union[bool, str] = None,
     more: bool = False,
 ):
-    played_sec = time_to_seconds(played)
-    duration_sec = time_to_seconds(dur)
-
-    remaining_sec = duration_sec - played_sec
-
-    if remaining_sec < 0:
-        remaining_sec = 0
-
-    rem_min = remaining_sec // 60
-    rem_sec = remaining_sec % 60
-    remaining = f"{rem_min:02d}:{rem_sec:02d}"
-
-    percentage = (
-        (played_sec / duration_sec) * 100
-        if duration_sec
-        else 0
-    )
-
-    umm = math.floor(percentage)
-
-    if 0 < umm <= 10:
-        bar = "|♬—————————|"
-    elif 10 < umm < 20:
-        bar = "|—♬————————|"
-    elif 20 <= umm < 30:
-        bar = "|——♬———————|"
-    elif 30 <= umm < 40:
-        bar = "|———♬——————|"
-    elif 40 <= umm < 50:
-        bar = "|————♬—————|"
-    elif 50 <= umm < 60:
-        bar = "|—————♬————|"
-    elif 60 <= umm < 70:
-        bar = "|——————♬———|"
-    elif 70 <= umm < 80:
-        bar = "|———————♬——|"
-    elif 80 <= umm < 95:
-        bar = "|————————♬—|"
-    else:
-        bar = "|—————————♬|"
-
-    if not more:
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text="▷",
-                    callback_data=f"ADMIN Resume|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="II",
-                    callback_data=f"ADMIN Pause|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="‣‣I",
-                    callback_data=f"ADMIN Skip|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="↻",
-                    callback_data=f"ADMIN Replay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="▢",
-                    callback_data=f"ADMIN Stop|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="☰ ᴍᴏʀᴇ",
-                    callback_data=f"ADMIN More|{chat_id}",
-                    style=ButtonStyle.SUCCESS,
-                ),
-                InlineKeyboardButton(
-                    text="🗑",
-                    callback_data="close",
-                    style=ButtonStyle.DANGER,
-                ),
-            ],
-        ]
-
-    else:
-
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text="▷",
-                    callback_data=f"ADMIN Resume|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="II",
-                    callback_data=f"ADMIN Pause|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="‣‣I",
-                    callback_data=f"ADMIN Skip|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="↻",
-                    callback_data=f"ADMIN Replay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="▢",
-                    callback_data=f"ADMIN Stop|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Autoplay",
-                    callback_data=f"ADMIN Autoplay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="Thumb",
-                    callback_data=f"ADMIN Thumb|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⟵ ʙᴀᴄᴋ",
-                    callback_data=f"ADMIN Back|{chat_id}",
-                    style=ButtonStyle.SUCCESS,
-                ),
-                InlineKeyboardButton(
-                    text="🗑",
-                    callback_data="close",
-                    style=ButtonStyle.DANGER,
-                ),
-            ],
-        ]
-
-    return buttons
+    return _player_buttons(chat_id, played, dur)
 
 
 def stream_markup(
@@ -207,106 +128,8 @@ def stream_markup(
     chat_filter: Union[bool, str] = None,
     more: bool = False,
 ):
-    if not more:
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text="▷",
-                    callback_data=f"ADMIN Resume|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="II",
-                    callback_data=f"ADMIN Pause|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="‣‣I",
-                    callback_data=f"ADMIN Skip|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="↻",
-                    callback_data=f"ADMIN Replay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="▢",
-                    callback_data=f"ADMIN Stop|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="☰ ᴍᴏʀᴇ",
-                    callback_data=f"ADMIN More|{chat_id}",
-                    style=ButtonStyle.SUCCESS,
-                ),
-                InlineKeyboardButton(
-                    text="🗑",
-                    callback_data="close",
-                    style=ButtonStyle.DANGER,
-                ),
-            ],
-        ]
-
-    else:
-
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    text="▷",
-                    callback_data=f"ADMIN Resume|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="II",
-                    callback_data=f"ADMIN Pause|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="‣‣I",
-                    callback_data=f"ADMIN Skip|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="↻",
-                    callback_data=f"ADMIN Replay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="▢",
-                    callback_data=f"ADMIN Stop|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="♫",
-                    callback_data=f"ADMIN Autoplay|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-                InlineKeyboardButton(
-                    text="⎘",
-                    callback_data=f"ADMIN Thumb|{chat_id}",
-                    style=ButtonStyle.PRIMARY,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⟵ ʙᴀᴄᴋ",
-                    callback_data=f"ADMIN Back|{chat_id}",
-                    style=ButtonStyle.SUCCESS,
-                ),
-                InlineKeyboardButton(
-                    text="🗑",
-                    callback_data="close",
-                    style=ButtonStyle.DANGER,
-                ),
-            ],
-        ]
-
-    return buttons
+    played, dur = _current_track_times(chat_id)
+    return _player_buttons(chat_id, played, dur)
 
 
 def playlist_markup(
