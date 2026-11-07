@@ -5,7 +5,7 @@
 from FoxyMusic.core.client_context import get_client
 from pyrogram import filters
 #from pyrogram.types import Message
-from pyrogram.types import Message, CallbackQuery
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 
 from pyrogram import filters
 from pyrogram.types import Message
@@ -14,8 +14,18 @@ from FoxyMusic import YouTube, app
 from FoxyMusic.core.call import Alone
 from FoxyMusic.misc import db
 from FoxyMusic.utils import AdminRightsCheck, seconds_to_min
-from FoxyMusic.utils.inline import close_markup
+from FoxyMusic.utils.inline import close_markup, stream_markup
 from config import BANNED_USERS
+
+
+async def refresh_player_controls(callback_query, chat_id):
+    """Refresh the displayed time/progress after a seek operation."""
+    try:
+        await callback_query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(stream_markup(None, chat_id))
+        )
+    except Exception:
+        pass
 
 @app.on_message(
     filters.command(["seek", "cseek", "seekback", "cseekback"])
@@ -155,6 +165,7 @@ async def seek_forward_20_cb(client, callback_query: CallbackQuery):
         )
 
         db[chat_id][0]["played"] += duration_to_skip
+        await refresh_player_controls(callback_query, chat_id)
         await callback_query.answer(
             f"✅ sᴛʀᴇᴀᴍ sᴜᴄᴄᴇssғᴜʟʟʏ sᴇᴇᴋᴇᴅ → 20 sᴇᴄs!\n\n▶️ ᴘʟᴀʏᴇᴅ : {seconds_to_min(db[chat_id][0]['played'])} / {duration_str}",
             show_alert=True
@@ -211,6 +222,7 @@ async def seek_backward_20_cb(client, callback_query: CallbackQuery):
         )
 
         db[chat_id][0]["played"] -= duration_to_skip
+        await refresh_player_controls(callback_query, chat_id)
         await callback_query.answer(
             f"✅ sᴛʀᴇᴀᴍ sᴜᴄᴄᴇssғᴜʟʟʏ sᴇᴇᴋᴇᴅ ʙᴀᴄᴋ → 20 sᴇᴄs!\n\n▶️ ᴘʟᴀʏᴇᴅ : {seconds_to_min(db[chat_id][0]['played'])} / {duration_str}",
             show_alert=True

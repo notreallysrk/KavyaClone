@@ -126,6 +126,8 @@ async def del_back_playlist(client, CallbackQuery, _):
                         return await CallbackQuery.answer(
                             _["admin_14"], show_alert=True
                         )
+    if command == "Progress":
+        return await CallbackQuery.answer("🎶 ᴘʟᴀʏʙᴀᴄᴋ ᴘʀᴏɢʀᴇss", show_alert=False)
     if command == "Pause":
         if not await is_music_playing(chat_id):
             return await CallbackQuery.answer(_["admin_1"], show_alert=True)
