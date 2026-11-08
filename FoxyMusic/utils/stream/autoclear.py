@@ -38,19 +38,17 @@ async def auto_clean(popped):
                 # existing playback-only flow).
                 try:
                     from FoxyMusic.utils import file_refs
-                    if file_refs.has_refs(rem):
-                        await file_refs.mark_for_delete(rem)
-                    else:
-                        try:
-                            os.remove(rem)
-                        except:
-                            pass
+                    # Always delegate deletion to the ref manager. Its lock
+                    # makes the ref-check + delete decision atomic, avoiding
+                    # a race where an upload acquires the file just after a
+                    # separate has_refs() check but before os.remove().
+                    await file_refs.mark_for_delete(rem)
                 except Exception:
-                    # Import error / file_refs failure — fall back to the
-                    # legacy behavior so we never leak files.
+                    # Import/runtime failure: retain the legacy best-effort
+                    # cleanup rather than leaving temporary audio behind.
                     try:
                         os.remove(rem)
-                    except:
+                    except OSError:
                         pass
     except:
         pass
