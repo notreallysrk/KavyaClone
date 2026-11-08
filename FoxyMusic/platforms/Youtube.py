@@ -337,12 +337,47 @@ class YouTubeAPI:
     ) -> str:
         if videoid:
             link = self.base + link
+
+        # Resolve a stable YouTube ID for the shared Telegram/MongoDB cache.
+        # Cache restore is attempted before the external downloader so repeat
+        # requests can start from a local file or Telegram storage immediately.
+        resolved_id = str(videoid) if videoid else ""
+        if not resolved_id:
+            match = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{6,})", str(link))
+            if match:
+                resolved_id = match.group(1)
+
+        media_type = "video" if video else "audio"
         try:
+            if resolved_id:
+                try:
+                    from FoxyMusic.utils.music_cache import try_cached_download
+                    cached_file = await try_cached_download(resolved_id, media_type)
+                    if cached_file:
+                        return cached_file, True
+                except Exception:
+                    # Cache is an optimization, never a playback dependency.
+                    pass
+
             if video:
                 downloaded_file = await download_video(link)
             else:
                 downloaded_file = await download_song(link)
+
             if downloaded_file:
+                # Upload to Telegram storage asynchronously. This must never
+                # delay the current playback start.
+                if resolved_id:
+                    try:
+                        from FoxyMusic.utils.music_cache import schedule_cache_upload
+                        await schedule_cache_upload(
+                            video_id=resolved_id,
+                            media_type=media_type,
+                            file_path=downloaded_file,
+                            title=title,
+                        )
+                    except Exception:
+                        pass
                 return downloaded_file, True
             return None, False
         except Exception:
