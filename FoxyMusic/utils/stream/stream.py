@@ -8,6 +8,7 @@
 
 from FoxyMusic.core.client_context import get_client
 import os
+import time
 from random import randint
 from typing import Union
 
@@ -296,12 +297,24 @@ async def stream(
         duration_min = result["duration_min"]
         thumbnail = result["thumb"]
         status = True if video else None
+        download_started_at = time.perf_counter()
         try:
             file_path, direct = await YouTube.download(
                 vidid, mystic, videoid=True, video=status
             )
+            LOGGER(__name__).info(
+                "[PlaybackTiming] chat=%s youtube_download=%.3fs cached_or_direct=%s",
+                chat_id,
+                time.perf_counter() - download_started_at,
+                bool(direct),
+            )
         except Exception as ex:
-            print(ex)
+            LOGGER(__name__).error(
+                "[PlaybackTiming] chat=%s youtube_download_failed after %.3fs: %s",
+                chat_id,
+                time.perf_counter() - download_started_at,
+                ex,
+            )
             raise AssistantErr(_["play_14"])
         if await is_active_chat(chat_id):
             await put_queue(
@@ -323,6 +336,7 @@ async def stream(
         else:
             if not forceplay:
                 db[chat_id] = []
+            join_started_at = time.perf_counter()
             await Alone.join_call(
                 chat_id,
                 original_chat_id,
@@ -330,6 +344,11 @@ async def stream(
                 title,
                 video=status,
                 image=thumbnail,
+            )
+            LOGGER(__name__).info(
+                "[PlaybackTiming] chat=%s voice_chat_join=%.3fs",
+                chat_id,
+                time.perf_counter() - join_started_at,
             )
             await put_queue(
                 chat_id,
