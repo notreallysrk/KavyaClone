@@ -6,6 +6,7 @@
 # Please see < https://github.com/Yuki77394/FoxyMusic/blob/master/LICENSE >
 # All rights reserved.
 
+import asyncio
 import random
 from typing import Dict, List, Union
 
@@ -51,6 +52,9 @@ music_cache_db = mongodb.music_cache
 active = []
 activevideo = []
 assistantdict = {}
+# Serializes first-time assistant assignment so simultaneous /play requests in
+# different groups cannot all observe the same load and pick the same account.
+_assistant_assignment_lock = asyncio.Lock()
 autoplay = {}
 autoend = {}
 autoleave = {}
@@ -111,18 +115,71 @@ async def set_assistant_new(chat_id, number):
     )
 
 
-async def set_assistant(chat_id):
+async def _assign_assistant_number(chat_id):
+    """Return a persisted assistant number using least-assigned balancing.
+
+    Existing assignments are kept stable. Only chats without a valid saved
+    assignment are balanced, so active voice chats are never moved between
+    assistant accounts unexpectedly.
+    """
     from FoxyMusic.core.userbot import assistants
 
-    ran_assistant = random.choice(assistants)
-    assistantdict[chat_id] = ran_assistant
+    if not assistants:
+        raise RuntimeError(
+            "No music assistant accounts are configured. Set at least one STRING session."
+        )
+
+    current = assistantdict.get(chat_id)
+    if current in assistants:
+        return current
+
+    # Reuse the saved assignment whenever it is still configured.
+    saved = await assdb.find_one({"chat_id": chat_id})
+    if saved:
+        saved_number = saved.get("assistant")
+        if saved_number in assistants:
+            assistantdict[chat_id] = saved_number
+            return saved_number
+
+    # Prefer persisted assignment counts so balancing still works after a
+    # restart, when assistantdict has not yet been repopulated. Fall back to
+    # the in-memory map if Mongo aggregation is temporarily unavailable.
+    loads = {number: 0 for number in assistants}
+    try:
+        cursor = assdb.aggregate(
+            [
+                {"$match": {"assistant": {"$in": list(assistants)}}},
+                {"$group": {"_id": "$assistant", "count": {"$sum": 1}}},
+            ]
+        )
+        rows = await cursor.to_list(length=None)
+        for row in rows:
+            number = row.get("_id")
+            if number in loads:
+                loads[number] = int(row.get("count", 0))
+    except Exception:
+        for assigned in assistantdict.values():
+            if assigned in loads:
+                loads[assigned] += 1
+
+    # Random tie-breaking avoids always favoring assistant 1.
+    minimum = min(loads.values())
+    least_loaded = [number for number, load in loads.items() if load == minimum]
+    selected = random.choice(least_loaded)
+
+    assistantdict[chat_id] = selected
     await assdb.update_one(
         {"chat_id": chat_id},
-        {"$set": {"assistant": ran_assistant}},
+        {"$set": {"assistant": selected}},
         upsert=True,
     )
-    userbot = await get_client(ran_assistant)
-    return userbot
+    return selected
+
+
+async def set_assistant(chat_id):
+    async with _assistant_assignment_lock:
+        assistant_number = await _assign_assistant_number(chat_id)
+    return await get_client(assistant_number)
 
 
 async def get_assistant(chat_id: int) -> str:
@@ -153,16 +210,8 @@ async def get_assistant(chat_id: int) -> str:
 
 
 async def set_calls_assistant(chat_id):
-    from FoxyMusic.core.userbot import assistants
-
-    ran_assistant = random.choice(assistants)
-    assistantdict[chat_id] = ran_assistant
-    await assdb.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"assistant": ran_assistant}},
-        upsert=True,
-    )
-    return ran_assistant
+    async with _assistant_assignment_lock:
+        return await _assign_assistant_number(chat_id)
 
 
 async def group_assistant(self, chat_id: int) -> int:
