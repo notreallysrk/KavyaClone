@@ -134,9 +134,14 @@ class Call(PyTgCalls):
                 "Stream source is empty — the underlying download or "
                 "URL resolver returned no media path."
             )
+        # Prefer the highest quality preset exposed by the installed PyTgCalls.
+        # Older pinned versions may not provide STUDIO, so keep HIGH as a safe fallback.
+        audio_quality = getattr(
+            types.AudioQuality, "STUDIO", types.AudioQuality.HIGH
+        )
         return types.MediaStream(
             media_path=source,
-            audio_parameters=types.AudioQuality.HIGH,
+            audio_parameters=audio_quality,
             video_parameters=types.VideoQuality.HD_720p,
             audio_flags=types.MediaStream.Flags.REQUIRED,
             video_flags=(
@@ -324,15 +329,20 @@ class Call(PyTgCalls):
     @capture_internal_err
     async def apply_filter(self, chat_id: int, file_path, filter_type, playing):
         assistant = await group_assistant(self, chat_id)
-        base = os.path.basename(file_path)
+        base = os.path.splitext(os.path.basename(str(file_path)))[0]
         chatdir = os.path.join(os.getcwd(), "filters", str(filter_type))
-        if not os.path.isdir(chatdir):
-            os.makedirs(chatdir)
-        out = os.path.join(chatdir, base)
+        os.makedirs(chatdir, exist_ok=True)
+        # FLAC keeps the filtered result lossless instead of re-encoding it to
+        # the lossy format of the original download (for example MP3).
+        out = os.path.join(chatdir, f"{base}.flac")
 
-        if not os.path.isfile(out) or filter_type == "normal":
+        if filter_type == "normal":
+            out = file_path
+        elif not os.path.isfile(out) or os.path.getsize(out) <= 0:
             if filter_type == "bass":
-                ff_filter = "bass=g=20,firequalizer=gain_entry='entry(0,0);entry(250,0);entry(4000,0);entry(16000,0)'"
+                # A restrained bass lift avoids the clipping caused by the old
+                # +20 dB preset while keeping the low end present.
+                ff_filter = "bass=g=4:f=100:w=0.6,alimiter=limit=0.95"
             elif filter_type == "echo":
                 ff_filter = "aecho=0.8:0.88:60:0.4"
             elif filter_type == "slowed":
@@ -340,30 +350,45 @@ class Call(PyTgCalls):
             elif filter_type == "nightcore":
                 ff_filter = "asetrate=48000*1.25,atempo=1.25"
             else:
-                ff_filter = "cat" # normal
+                ff_filter = None
 
-            if filter_type == "normal":
-                out = file_path
-            else:
+            if ff_filter:
                 try:
-                    proc = await asyncio.create_subprocess_shell(
-                        cmd=(
-                            "ffmpeg "
-                            "-i "
-                            f"{file_path} "
-                            "-filter:a "
-                            f"\"{ff_filter}\" "
-                            f"{out} -y"
-                        ),
-                        stdin=asyncio.subprocess.PIPE,
+                    proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        str(file_path),
+                        "-map",
+                        "0:a:0",
+                        "-vn",
+                        "-af",
+                        ff_filter,
+                        "-c:a",
+                        "flac",
+                        "-compression_level",
+                        "3",
+                        "-y",
+                        out,
+                        stdout=asyncio.subprocess.DEVNULL,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    await proc.communicate()
-                except:
-                    pass
-
-                if not os.path.isfile(out):
+                    _, stderr = await proc.communicate()
+                    if proc.returncode != 0 or not os.path.isfile(out) or os.path.getsize(out) <= 0:
+                        if os.path.exists(out):
+                            os.remove(out)
+                        out = file_path
+                except Exception:
+                    if os.path.exists(out):
+                        try:
+                            os.remove(out)
+                        except OSError:
+                            pass
                     out = file_path
+            else:
+                out = file_path
 
         dur = await asyncio.get_event_loop().run_in_executor(None, check_duration, out)
         if str(dur) == "Unknown":
@@ -384,23 +409,6 @@ class Call(PyTgCalls):
             db[chat_id][0]["played"] = played
             db[chat_id][0]["dur"] = duration
             db[chat_id][0]["seconds"] = dur
-
-    async def force_stop_stream(self, chat_id: int):
-        assistant = await group_assistant(self, chat_id)
-        try:
-            check = db.get(chat_id)
-            if check:
-                popped = check.pop(0)
-                if popped:
-                    await auto_clean(popped)
-        except Exception:
-            pass
-        await remove_active_video_chat(chat_id)
-        await remove_active_chat(chat_id)
-        try:
-            await assistant.leave_call(chat_id, close=False)
-        except Exception:
-            pass
 
     @capture_internal_err
     async def skip_stream(
