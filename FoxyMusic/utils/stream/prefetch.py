@@ -134,9 +134,8 @@ async def _get_per_song_lock(
 ) -> asyncio.Lock:
     """Return (or create) a per-song lock.
 
-    The locks dict is small (at most one entry per currently-prefetching
-    song) so we don't garbage-collect it — entries are cheap and the
-    asyncio.Lock objects are reused if the same song is re-queued.
+    Locks are removed by the task completion callback when no replacement
+    task is using the same key, preventing the registry from growing forever.
     """
     key = (chat_id, videoid, media_type)
     lock = _per_song_locks.get(key)
@@ -225,6 +224,13 @@ async def schedule_prefetch(
     # Acquire the per-song lock to prevent two simultaneous prefetch tasks
     # for the same song (e.g. if put_queue is called twice in rapid succession).
     song_lock = await _get_per_song_lock(chat_id, videoid, media_type)
+
+    # Another caller may have passed the first check while this coroutine
+    # awaited the per-song lock. Re-check before creating a task so only one
+    # worker is registered for this (chat, video, media type).
+    chat_tasks = _tasks.get(chat_id)
+    if chat_tasks and task_key in chat_tasks:
+        return
 
     # Spawn the background task. We deliberately do NOT await it.
     task = asyncio.create_task(
@@ -348,8 +354,15 @@ def _on_task_done(
                 chat_tasks.pop(task_key, None)
             if not chat_tasks:
                 _tasks.pop(chat_id, None)
-        media_type = task_key[1]
-        _per_song_locks.pop((chat_id, videoid, media_type), None)
+
+        # A cancelled worker may finish after a replacement worker has
+        # already been registered. Keep the shared lock while that newer
+        # worker is alive; otherwise a third caller could create a second
+        # lock and race the replacement download.
+        current_tasks = _tasks.get(chat_id, {})
+        if task_key not in current_tasks:
+            media_type = task_key[1]
+            _per_song_locks.pop((chat_id, videoid, media_type), None)
     except Exception:
         # Never let a cleanup callback raise.
         pass
