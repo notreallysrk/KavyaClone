@@ -4,6 +4,7 @@
 
 from FoxyMusic.core.client_context import get_client
 import asyncio
+import time
 import os
 import random
 from datetime import datetime, timedelta
@@ -153,19 +154,36 @@ class Call(PyTgCalls):
         chat_id: int,
         stream: types.MediaStream,
     ):
+        started_at = time.perf_counter()
         try:
             await client.play(
                 chat_id=chat_id,
                 stream=stream,
                 config=types.GroupCallConfig(auto_start=False),
             )
+            LOGGER(__name__).info(
+                "[PlaybackTiming] chat=%s assistant_play_call=%.3fs",
+                chat_id,
+                time.perf_counter() - started_at,
+            )
         except asyncio.TimeoutError:
+            LOGGER(__name__).warning(
+                "[PlaybackTiming] chat=%s play call timed out after %.3fs; retrying",
+                chat_id,
+                time.perf_counter() - started_at,
+            )
             await asyncio.sleep(3)
+            retry_started_at = time.perf_counter()
             try:
                 await client.play(
                     chat_id=chat_id,
                     stream=stream,
                     config=types.GroupCallConfig(auto_start=False),
+                )
+                LOGGER(__name__).info(
+                    "[PlaybackTiming] chat=%s assistant_play_retry=%.3fs",
+                    chat_id,
+                    time.perf_counter() - retry_started_at,
                 )
             except Exception:
                 raise
