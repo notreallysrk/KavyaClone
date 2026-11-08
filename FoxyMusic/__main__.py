@@ -104,13 +104,26 @@ async def init():
 
     await idle()
 
-    # ─── Graceful shutdown: cancel any in-flight cache uploads ───────────
+    # ─── Graceful shutdown: cancel background stream/cache tasks ─────────
+    # Stop prefetch workers first so they cannot start new downloads while
+    # cache uploads and the Telegram clients are shutting down.
+    try:
+        from FoxyMusic.utils.stream.prefetch import cancel_all_prefetch
+
+        cancel_all_prefetch()
+    except Exception as e:
+        LOGGER("FoxyMusic.shutdown").warning(
+            f"Prefetch shutdown issue: {type(e).__name__}"
+        )
+
     try:
         from FoxyMusic.utils.music_cache import cancel_all_uploads
 
         cancel_all_uploads()
-    except Exception:
-        pass
+    except Exception as e:
+        LOGGER("FoxyMusic.shutdown").warning(
+            f"Cache upload shutdown issue: {type(e).__name__}"
+        )
 
     # Stop dynamic clone clients cleanly before the primary bot shuts down.
     try:
