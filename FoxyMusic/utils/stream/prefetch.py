@@ -85,9 +85,9 @@ _log = LOGGER(__name__)
 #   - Tunable via env var PREFETCH_CONCURRENCY if an operator needs more.
 #   - Falsy or invalid values disable prefetch entirely (set to 0).
 try:
-    _concurrency = int(os.environ.get("PREFETCH_CONCURRENCY", "1"))
+    _concurrency = int(os.environ.get("PREFETCH_CONCURRENCY", "2"))
 except (TypeError, ValueError):
-    _concurrency = 1
+    _concurrency = 2
 if _concurrency < 0:
     _concurrency = 1
 
