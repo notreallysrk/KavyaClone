@@ -1,137 +1,233 @@
-# ─────「 𝐅ᴏxʏ 」─────
-#    Official Project Source
-# ────────────────────────
+# ===========================================================
+# 🖼 NOW PLAYING THUMBNAIL — blurred song-image background
+#
+# Design: jo song play ho raha hai uski image poore background
+# me BLUR hoke lagti hai, beech me white player card, album art
+# (square, card se bahar nikli hui), artist + title, progress bar
+# aur controls.
+#
+# Use (purane get_thumb / gen_thumb ki jagah):
+#   from ShiviMusic.utils.thumbnails import get_thumb
+#   thumb = await get_thumb(videoid)
+# ===========================================================
 
+import asyncio
+import io
 import os
 import re
-import aiofiles
+
 import aiohttp
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
-from py_yt import VideosSearch
-from config import YOUTUBE_IMG_URL
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# Constants
-CACHE_DIR = "cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
+W, H = 1280, 720
+BLUR_RADIUS = 38  # zyada = aur blur
 
-PANEL_W, PANEL_H = 763, 545
-PANEL_X = (1280 - PANEL_W) // 2
-PANEL_Y = 88
-TRANSPARENCY = 170
-INNER_OFFSET = 36
+_ASSETS = os.path.join(os.path.dirname(__file__), "..", "assets")
+_FONT_CANDIDATES = [
+    os.path.join(_ASSETS, "font.ttf"),
+    os.path.join(_ASSETS, "font2.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
 
-THUMB_W, THUMB_H = 542, 273
-THUMB_X = PANEL_X + (PANEL_W - THUMB_W) // 2
-THUMB_Y = PANEL_Y + INNER_OFFSET
 
-TITLE_X = 377
-META_X = 377
-TITLE_Y = THUMB_Y + THUMB_H + 10
-META_Y = TITLE_Y + 45
+def _font(size: int, bold: bool = False):
+    cands = list(_FONT_CANDIDATES)
+    if bold:
+        cands.insert(0, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    for p in cands:
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
-BAR_X, BAR_Y = 388, META_Y + 45
-BAR_RED_LEN = 280
-BAR_TOTAL_LEN = 480
 
-ICONS_W, ICONS_H = 415, 45
-ICONS_X = PANEL_X + (PANEL_W - ICONS_W) // 2
-ICONS_Y = BAR_Y + 48
+def _cover_crop(img: Image.Image, w: int, h: int) -> Image.Image:
+    iw, ih = img.size
+    sc = max(w / iw, h / ih)
+    img = img.resize((int(iw * sc) + 1, int(ih * sc) + 1), Image.LANCZOS)
+    l, t = (img.width - w) // 2, (img.height - h) // 2
+    return img.crop((l, t, l + w, t + h))
 
-MAX_TITLE_WIDTH = 580
 
-def trim_to_width(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> str:
-    ellipsis = "…"
-    if font.getlength(text) <= max_w:
+def _blurred_background(cover: Image.Image) -> Image.Image:
+    bg = _cover_crop(cover, W, H).filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    # halka sa dark overlay taaki card/text clear dikhe
+    dark = Image.new("RGB", (W, H), (0, 0, 0))
+    return Image.blend(bg, dark, 0.28)
+
+
+def _rounded(img: Image.Image, radius: int) -> Image.Image:
+    img = img.convert("RGBA")
+    mask = Image.new("L", img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, *img.size), radius, fill=255)
+    img.putalpha(mask)
+    return img
+
+
+def _shadow(canvas: Image.Image, box, radius: int, blur: int = 28, alpha: int = 110, dy: int = 14):
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    x0, y0, x1, y1 = box
+    ImageDraw.Draw(layer).rounded_rectangle(
+        (x0, y0 + dy, x1, y1 + dy), radius, fill=(0, 0, 0, alpha)
+    )
+    layer = layer.filter(ImageFilter.GaussianBlur(blur))
+    canvas.alpha_composite(layer)
+
+
+def _fit_text(draw, text: str, font, max_w: int) -> str:
+    if draw.textlength(text, font=font) <= max_w:
         return text
-    for i in range(len(text) - 1, 0, -1):
-        if font.getlength(text[:i] + ellipsis) <= max_w:
-            return text[:i] + ellipsis
-    return ellipsis
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return text.rstrip() + "…"
 
-async def get_thumb(videoid: str):
-    cache_path = os.path.join(CACHE_DIR, f"{videoid}_v4.png")
-    if os.path.exists(cache_path):
-        return cache_path
 
-    # YouTube video data fetch
-    results = VideosSearch(f"https://www.youtube.com/watch?v={videoid}", limit=1)
+def _spaced(draw, xy, text: str, font, fill, spacing: int):
+    x, y = xy
+    for ch in text:
+        draw.text((x, y), ch, font=font, fill=fill)
+        x += draw.textlength(ch, font=font) + spacing
+
+
+def _clean_title(t) -> str:
+    t = str(t or "")
+    t = re.sub(r"\((.*?)\)|\[(.*?)\]", "", t or "")
+    t = re.sub(r"\b(official|video|audio|lyrical|lyrics|full song|hd|4k)\b", "", t, flags=re.I)
+    return re.sub(r"\s+", " ", t).strip(" -|") or (t or "Unknown")
+
+
+def compose_thumb(cover: Image.Image, title: str, artist: str, duration: str, path: str):
+    cover = cover.convert("RGB")
+    canvas = _blurred_background(cover).convert("RGBA")
+    d = ImageDraw.Draw(canvas)
+
+    # ---- white card ----
+    cx0, cy0, cx1, cy1 = 190, 215, 1090, 505
+    _shadow(canvas, (cx0, cy0, cx1, cy1), 26, blur=30, alpha=90)
+    card = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(card).rounded_rectangle(
+        (cx0, cy0, cx1, cy1), 26, fill=(255, 255, 255, 245)
+    )
+    canvas.alpha_composite(card)
+    d = ImageDraw.Draw(canvas)
+
+    # ---- album art (card se bahar nikla hua) ----
+    S = 390
+    ax, ay = 300, (cy0 + cy1) // 2 - S // 2
+    _shadow(canvas, (ax, ay, ax + S, ay + S), 14, blur=26, alpha=140, dy=16)
+    art = _rounded(_cover_crop(cover, S, S), 14)
+    canvas.alpha_composite(art, (ax, ay))
+    d = ImageDraw.Draw(canvas)
+
+    ink = (22, 22, 22, 255)
+    mid = (110, 110, 110, 255)
+
+    # ---- left icons: heart, plus, share ----
+    ix, cy = 245, (cy0 + cy1) // 2
+    # heart
+    hy = cy - 70
+    d.ellipse((ix - 15, hy - 13, ix, hy + 2), outline=ink, width=3)
+    d.ellipse((ix, hy - 13, ix + 15, hy + 2), outline=ink, width=3)
+    d.polygon([(ix - 14, hy - 1), (ix + 14, hy - 1), (ix, hy + 15)], fill=(255, 255, 255, 255))
+    d.line([(ix - 14, hy + 1), (ix, hy + 16), (ix + 14, hy + 1)], fill=ink, width=3)
+    # plus
+    d.line([(ix - 14, cy), (ix + 14, cy)], fill=ink, width=3)
+    d.line([(ix, cy - 14), (ix, cy + 14)], fill=ink, width=3)
+    # share
+    sy = cy + 70
+    d.line([(ix - 14, sy - 2), (ix - 14, sy + 14), (ix + 14, sy + 14), (ix + 14, sy - 2)], fill=ink, width=3)
+    d.line([(ix, sy + 6), (ix, sy - 16)], fill=ink, width=3)
+    d.polygon([(ix, sy - 20), (ix - 8, sy - 10), (ix + 8, sy - 10)], fill=ink)
+
+    # ---- text ----
+    tx0, tx1 = 725, 1045
+    max_w = tx1 - tx0
+    f_artist, f_title, f_small = _font(28, True), _font(30), _font(17)
+    artist_txt = (artist or "Unknown").upper()
+    while d.textlength(artist_txt, font=f_artist) + 5 * len(artist_txt) > max_w and len(artist_txt) > 3:
+        artist_txt = artist_txt[:-2] + "…" if not artist_txt.endswith("…") else artist_txt[:-2] + "…"
+    _spaced(d, (tx0, 262), artist_txt, f_artist, ink, 5)
+    d.text((tx0, 312), _fit_text(d, _clean_title(title), f_title, max_w), font=f_title, fill=ink)
+
+    # ---- progress bar ----
+    by = 388
+    d.rounded_rectangle((tx0, by, tx1, by + 4), 2, fill=(222, 226, 232, 255))
+    fill_x = tx0 + int(max_w * 0.07)
+    d.rounded_rectangle((tx0, by, fill_x, by + 4), 2, fill=ink)
+    d.text((tx0, by + 14), "0:00", font=f_small, fill=ink)
+    d.text((tx1, by + 14), duration or "0:00", font=f_small, fill=ink, anchor="ra")
+
+    # ---- controls ----
+    mx, my = (tx0 + tx1) // 2, 460
+    d.ellipse((mx - 28, my - 28, mx + 28, my + 28), fill=ink)
+    d.rectangle((mx - 9, my - 11, mx - 3, my + 11), fill=(255, 255, 255, 255))
+    d.rectangle((mx + 3, my - 11, mx + 9, my + 11), fill=(255, 255, 255, 255))
+    for off, sign in ((-95, -1), (95, 1)):  # prev / next
+        x = mx + off
+        for k in (0, 14):
+            if sign < 0:
+                d.polygon([(x - k + 8, my - 9), (x - k + 8, my + 9), (x - k - 6, my)], fill=ink)
+            else:
+                d.polygon([(x + k - 8, my - 9), (x + k - 8, my + 9), (x + k + 6, my)], fill=ink)
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    canvas.convert("RGB").save(path, "JPEG", quality=92)
+    return path
+
+
+async def _download(session, vidid: str):
+    for q in ("maxresdefault", "sddefault", "hqdefault", "mqdefault"):
+        try:
+            async with session.get(
+                f"https://i.ytimg.com/vi/{vidid}/{q}.jpg",
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as r:
+                if r.status == 200:
+                    img = Image.open(io.BytesIO(await r.read())).convert("RGB")
+                    if img.width > 200:
+                        return img
+        except Exception:
+            continue
+    return None
+
+
+async def get_thumb(videoid, *args, title=None, artist=None, duration=None, **kwargs):
+    """Blur-background now-playing thumbnail banata hai. Fail => YouTube thumb URL.
+
+    Purane code ke saare call styles chalte hain: get_thumb(vidid),
+    get_thumb(vidid, user_id), get_thumb(vidid, a, b, c ...) -- extra args ignore.
+    """
+    videoid = str(videoid)
+    title = title if isinstance(title, str) else None
+    artist = artist if isinstance(artist, str) else None
+    duration = duration if isinstance(duration, str) else None
+    fallback = f"https://i.ytimg.com/vi/{videoid}/hqdefault.jpg"
+    path = f"cache/{videoid}_np.jpg"
+    if os.path.isfile(path):
+        return path
     try:
-        results_data = await results.next()
-        result_items = results_data.get("result", [])
-        if not result_items:
-            raise ValueError("No results found.")
-        data = result_items[0]
-        title = re.sub(r"\W+", " ", data.get("title", "Unsupported Title")).title()
-        thumbnail = data.get("thumbnails", [{}])[0].get("url", YOUTUBE_IMG_URL)
-        duration = data.get("duration")
-        views = data.get("viewCount", {}).get("short", "Unknown Views")
-    except Exception:
-        title, thumbnail, duration, views = "Unsupported Title", YOUTUBE_IMG_URL, None, "Unknown Views"
+        if not (title and artist and duration):
+            from py_yt import VideosSearch
 
-    is_live = not duration or str(duration).strip().lower() in {"", "live", "live now"}
-    duration_text = "Live" if is_live else duration or "Unknown Mins"
-
-    # Download thumbnail
-    thumb_path = os.path.join(CACHE_DIR, f"thumb{videoid}.png")
-    try:
+            res = await VideosSearch(
+                f"https://www.youtube.com/watch?v={videoid}", limit=1
+            ).next()
+            r = res["result"][0]
+            title = title or r.get("title")
+            artist = artist or (r.get("channel") or {}).get("name")
+            duration = duration or r.get("duration")
         async with aiohttp.ClientSession() as session:
-            async with session.get(thumbnail) as resp:
-                if resp.status == 200:
-                    async with aiofiles.open(thumb_path, "wb") as f:
-                        await f.write(await resp.read())
-    except Exception:
-        return YOUTUBE_IMG_URL
+            cover = await _download(session, videoid)
+        if cover is None:
+            return fallback
+        await asyncio.get_running_loop().run_in_executor(
+            None, compose_thumb, cover, title, artist, duration, path
+        )
+        return path
+    except Exception as e:
+        print(f"[THUMB] fail: {type(e).__name__}: {e}")
+        return fallback
 
-    # Create base image
-    base = Image.open(thumb_path).resize((1280, 720)).convert("RGBA")
-    bg = ImageEnhance.Brightness(base.filter(ImageFilter.BoxBlur(10))).enhance(0.6)
 
-    # Frosted glass panel
-    panel_area = bg.crop((PANEL_X, PANEL_Y, PANEL_X + PANEL_W, PANEL_Y + PANEL_H))
-    overlay = Image.new("RGBA", (PANEL_W, PANEL_H), (255, 255, 255, TRANSPARENCY))
-    frosted = Image.alpha_composite(panel_area, overlay)
-    mask = Image.new("L", (PANEL_W, PANEL_H), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, PANEL_W, PANEL_H), 50, fill=255)
-    bg.paste(frosted, (PANEL_X, PANEL_Y), mask)
-
-    # Draw details
-    draw = ImageDraw.Draw(bg)
-    try:
-        title_font = ImageFont.truetype("FoxyMusic/assets/font2.ttf", 32)
-        regular_font = ImageFont.truetype("FoxyMusic/assets/font.ttf", 18)
-    except OSError:
-        title_font = regular_font = ImageFont.load_default()
-
-    thumb = base.resize((THUMB_W, THUMB_H))
-    tmask = Image.new("L", thumb.size, 0)
-    ImageDraw.Draw(tmask).rounded_rectangle((0, 0, THUMB_W, THUMB_H), 20, fill=255)
-    bg.paste(thumb, (THUMB_X, THUMB_Y), tmask)
-
-    draw.text((TITLE_X, TITLE_Y), trim_to_width(title, title_font, MAX_TITLE_WIDTH), fill="black", font=title_font)
-    draw.text((META_X, META_Y), f"YouTube | {views}", fill="black", font=regular_font)
-
-    # Progress bar
-    draw.line([(BAR_X, BAR_Y), (BAR_X + BAR_RED_LEN, BAR_Y)], fill="red", width=6)
-    draw.line([(BAR_X + BAR_RED_LEN, BAR_Y), (BAR_X + BAR_TOTAL_LEN, BAR_Y)], fill="gray", width=5)
-    draw.ellipse([(BAR_X + BAR_RED_LEN - 7, BAR_Y - 7), (BAR_X + BAR_RED_LEN + 7, BAR_Y + 7)], fill="red")
-
-    draw.text((BAR_X, BAR_Y + 15), "00:00", fill="black", font=regular_font)
-    end_text = "Live" if is_live else duration_text
-    draw.text((BAR_X + BAR_TOTAL_LEN - (90 if is_live else 60), BAR_Y + 15), end_text, fill="red" if is_live else "black", font=regular_font)
-
-    # Icons
-    icons_path = "FoxyMusic/assets/play_icons.png"
-    if os.path.isfile(icons_path):
-        ic = Image.open(icons_path).resize((ICONS_W, ICONS_H)).convert("RGBA")
-        r, g, b, a = ic.split()
-        black_ic = Image.merge("RGBA", (r.point(lambda *_: 0), g.point(lambda *_: 0), b.point(lambda *_: 0), a))
-        bg.paste(black_ic, (ICONS_X, ICONS_Y), black_ic)
-
-    # Cleanup and save
-    try:
-        os.remove(thumb_path)
-    except OSError:
-        pass
-
-    bg.save(cache_path)
-    return cache_path
+gen_thumb = get_thumb  # purane naam se bhi chale
